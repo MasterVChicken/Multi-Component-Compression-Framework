@@ -1,23 +1,23 @@
-#ifndef GPU_COMPRESSOR_H
-#define GPU_COMPRESSOR_H
+#ifndef GPU_COMPRESSOR_HPP
+#define GPU_COMPRESSOR_HPP
 
-#include <cstddef>
-#include <cstdint>
-#include <vector>
+#include "mgard/compress_x.hpp"
 
-enum class DataType { FLOAT, DOUBLE };
+// By default we only apply L-infinity norm and ABS error mode
+// So we omit these params
 
 // Abstract GPU compressor interface
-class GPUCompressor {
+template <typename T>
+class GPUCompressor
+{
 public:
-  virtual ~GPUCompressor() {}
-  virtual bool compress(int D, std::vector<int> shape, double tol,
-                        DataType dataType, const void *original_data,
-                        void *&compressed_data, size_t &compressed_size) = 0;
+  virtual bool compress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape,
+                        double tol, T *original_data, void *&compressed_data,
+                        size_t &compressed_size) = 0;
 
   virtual bool decompress(const void *compressed_data, size_t compressed_size,
                           void *&decompressed_data) = 0;
 };
 
 #endif
-// GPU_COMPRESSOR_H
+// GPU_COMPRESSOR_HPP
