@@ -1,26 +1,20 @@
 #ifndef GPU_MGARD_COMPRESSOR_HPP
 #define GPU_MGARD_COMPRESSOR_HPP
 
-#include "GPUCompressor.hpp"
+#include "GeneralCompressor.hpp"
 #include <cmath>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <vector>
 
-#include "mgard/compress_x.hpp"
-
 template <typename T>
-class GPUMGARDCompressor : public GPUCompressor<T>
+class GPUMGARDCompressor : public GeneralCompressor<T>
 {
 public:
-  GPUMGARDCompressor() {}
-
-  ~GPUMGARDCompressor() {}
-
   bool compress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape, double tol,
                 T *original_data, void *&compressed_data,
-                size_t &compressed_size)
+                size_t &compressed_size) override
   {
     mgard_x::Config config;
     config.dev_type = mgard_x::device_type::CUDA;
@@ -58,8 +52,9 @@ public:
     return true;
   }
 
-  bool decompress(const void *compressed_data, size_t compressed_size,
-                  void *&decompressed_data)
+  bool decompress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape, double tol,
+                  void *compressed_data, size_t compressed_size,
+                  void *&decompressed_data) override
   {
     mgard_x::Config config;
     config.dev_type = mgard_x::device_type::CUDA;

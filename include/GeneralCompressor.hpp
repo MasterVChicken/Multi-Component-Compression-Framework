@@ -8,15 +8,16 @@
 
 // Abstract GPU compressor interface
 template <typename T>
-class GPUCompressor
+class GeneralCompressor
 {
 public:
   virtual bool compress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape,
                         double tol, T *original_data, void *&compressed_data,
                         size_t &compressed_size) = 0;
 
-  virtual bool decompress(const void *compressed_data, size_t compressed_size,
-                          void *&decompressed_data) = 0;
+  virtual bool decompress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape,
+                          double tol, void *compressed_data,
+                          size_t compressed_size, void *&decompressed_data) = 0;
 };
 
 #endif

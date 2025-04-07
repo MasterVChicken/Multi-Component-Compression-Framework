@@ -1,7 +1,7 @@
 #ifndef PROGRESSIVE_COMPRESSOR_HPP
 #define PROGRESSIVE_COMPRESSOR_HPP
 
-#include "GPUCompressor.hpp"
+#include "GeneralCompressor.hpp"
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <chrono>
 #include <cuda_runtime.h>
 
 template <typename T>
@@ -88,8 +89,10 @@ public:
     double tol;
   };
 
-  ProgressiveCompressor(GPUCompressor<T> *compressor)
-      : compressor_(compressor), num_components_(0), xTilde_(nullptr), n_(0) {}
+  ProgressiveCompressor(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape,
+                        GeneralCompressor<T> *compressor)
+      : D_(D), shape_(shape), compressor_(compressor),
+        num_components_(0), xTilde_(nullptr), n_(0) {}
 
   ~ProgressiveCompressor()
   {
@@ -97,81 +100,67 @@ public:
     {
       if (components_[i].compressed_data != nullptr)
       {
-        delete[] static_cast<unsigned char *>(components_[i].compressed_data);
+        free(components_[i].compressed_data);
       }
     }
-
     if (xTilde_)
     {
       delete[] xTilde_;
     }
   }
 
-  bool compressData(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape,
-                    const T *original_data, const double *toleranceList,
-                    int nComponents)
+  bool compressData(const T *original_data, const double *toleranceList, int nComponents)
   {
     n_ = 1;
-    for (int i = 0; i < D; i++)
+    for (int i = 0; i < D_; i++)
     {
-      n_ *= shape[i];
+      n_ *= shape_[i];
     }
 
-    if (std::is_same<T, float>::value || std::is_same<T, double>::value)
+    xTilde_ = new T[n_];
+    for (size_t i = 0; i < n_; i++)
     {
-      xTilde_ = new T[n_];
-      for (size_t i = 0; i < n_; i++)
-      {
-        xTilde_[i] = 0.0;
-      }
-    }
-    else
-    {
-      throw std::runtime_error("Unsupported data type in compressData.");
-      return false;
+      xTilde_[i] = 0.0;
     }
 
     components_.resize(nComponents);
+    compressTimes_.resize(nComponents, 0.0);
     num_components_ = nComponents;
 
     for (int compIdx = 0; compIdx < nComponents; compIdx++)
     {
       double tol = toleranceList[compIdx];
 
-      T *error = new T[n_];
+      auto comp_t0 = std::chrono::high_resolution_clock::now();
 
-      // for (size_t j = 0; j < n_; j++)
-      // {
-      //   error[j] = original_data[j] - xTilde_[j];
-      // }
-      // Rough implementation
+      T *error = new T[n_];
       launchComputeErrorKernel<T>(original_data, xTilde_, error, n_);
 
       void *comp_data = nullptr;
       size_t comp_size = 0;
-      bool ok = compressor_->compress(D, shape, tol, error,
-                                      comp_data, comp_size);
+      bool ok = compressor_->compress(D_, shape_, tol, error, comp_data, comp_size);
       delete[] error;
       if (!ok)
       {
-        std::cerr << "Compression failed at component " << compIdx + 1
-                  << std::endl;
+        std::cerr << "Compression failed at component " << compIdx + 1 << std::endl;
         return false;
       }
       components_[compIdx].compressed_data = comp_data;
       components_[compIdx].compressed_size = comp_size;
       components_[compIdx].tol = tol;
 
+      auto comp_t1 = std::chrono::high_resolution_clock::now();
+      compressTimes_[compIdx] = std::chrono::duration<double>(comp_t1 - comp_t0).count();
+
       void *decompressed = nullptr;
-      ok = compressor_->decompress(comp_data, comp_size, decompressed);
+      ok = compressor_->decompress(D_, shape_, tol, comp_data, comp_size, decompressed);
       if (!ok || decompressed == nullptr)
       {
-        std::cerr << "Decompression failed at component " << compIdx + 1
-                  << std::endl;
+        std::cerr << "[ERROR] Decompression failed at component " << compIdx + 1 << std::endl;
+        std::cerr << "[ERROR] comp_size = " << comp_size << std::endl;
+        std::cerr << "[ERROR] comp_data ptr = " << comp_data << std::endl;
         return false;
       }
-
-      // Measure actual error(can be removed if not needed)
       T *decompressed_data = static_cast<T *>(decompressed);
       T maxErr = 0.0;
       for (size_t j = 0; j < n_; j++)
@@ -186,8 +175,7 @@ public:
                 << ", tol = " << tol << std::endl;
     }
 
-    // Write out metadata file
-    if (!writeMetadata("metadata.txt", D, shape))
+    if (!writeMetadata("metadata.txt", D_, shape_))
     {
       std::cerr << "Failed to write metadata file." << std::endl;
       return false;
@@ -206,33 +194,40 @@ public:
     }
     for (int i = 0; i < m; i++)
     {
-      std::cout << "Componet " << i + 1 << " has been used!" << std::endl;
+      std::cout << "Component " << i + 1 << " has been used!" << std::endl;
       void *decompressed = nullptr;
-      bool ok =
-          compressor_->decompress(components_[i].compressed_data,
-                                  components_[i].compressed_size, decompressed);
+
+      double dummyTol = 0;
+      bool ok = compressor_->decompress(D_, shape_, dummyTol, components_[i].compressed_data,
+                                        components_[i].compressed_size, decompressed);
       if (!ok || decompressed == nullptr)
       {
-        std::cerr << "Decompression failed in reconstructData at component "
-                  << i + 1 << std::endl;
+        std::cerr << "Decompression failed in reconstructData at component " << i + 1 << std::endl;
         delete[] result;
         return nullptr;
       }
       T *decompressed_data = static_cast<T *>(decompressed);
-      // Substistute with device kernel
-      // for (size_t j = 0; j < n_; j++)
-      // {
-      //   result[j] += decompressed_data[j];
-      // }
-      // Rough implementation
       launchAccumulateKernel<T>(result, decompressed_data, n_);
-
       delete[] decompressed_data;
     }
     return result;
   }
 
   int getNumComponents() const { return num_components_; }
+
+  size_t getCompressedSize(int componentIdx) const
+  {
+    if (componentIdx < 0 || componentIdx >= num_components_)
+      return 0;
+    return components_[componentIdx].compressed_size;
+  }
+
+  double getComponentCompressTime(int idx) const
+  {
+    if (idx < 0 || idx >= compressTimes_.size())
+      return 0;
+    return compressTimes_[idx];
+  }
 
   int requestComponentsForBound(double reqBound)
   {
@@ -243,7 +238,6 @@ public:
       return 0;
     }
     std::string line;
-    // 跳过注释和头部信息
     while (std::getline(ifs, line))
     {
       if (line.empty() || line[0] == '#')
@@ -302,11 +296,15 @@ public:
   }
 
 private:
-  GPUCompressor<T> *compressor_;
+  GeneralCompressor<T> *compressor_;
   std::vector<Component> components_;
+  std::vector<double> compressTimes_;
   int num_components_;
   T *xTilde_;
   size_t n_;
+
+  mgard_x::DIM D_;
+  std::vector<mgard_x::SIZE> shape_;
 };
 
 #endif // PROGRESSIVE_COMPRESSOR_HPP

@@ -1,10 +1,8 @@
 # Multi-Component-Compression-Framework
 
-| Compressor Type | Version |
-| :-------------: | ------: |
-|      MGARD      |   1.5.2 |
-|       ZFP       |   1.0.0 |
-|       SZ        |  v3.1.7 |
+GPU Compressor: MGARD, ZFP, CUSZp  
+
+CPU Compressor: ZFP, SZ3
 
 To build and test the framework:
 ```
