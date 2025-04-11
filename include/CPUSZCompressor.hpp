@@ -1,67 +1,48 @@
-#ifndef GPU_SZ_COMPRESSOR_HPP
-#define GPU_SZ_COMPRESSOR_HPP
+#ifndef CPU_SZ_COMPRESSOR_HPP
+#define CPU_SZ_COMPRESSOR_HPP
 
 #include "GeneralCompressor.hpp"
-#include <cuSZp.h>
-#include <cuda_runtime.h>
+#include "SZ3/api/sz.hpp"
 // #include <omp.h>
 // omp_set_num_threads(24);
 
 // OPENMP
 
 template <typename T>
-class GPUSZCompressor : public GeneralCompressor<T>
+class CPUSZCompressor : public GeneralCompressor<T>
 {
 public:
     bool compress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape, double tol,
                   T *original_data, void *&compressed_data,
                   size_t &compressed_size) override
     {
-        cuszp_type_t dataType;
-        // or we can use CUSZP_MODE_OUTLIER
-        cuszp_mode_t encodingMode = CUSZP_MODE_PLAIN;
-
-        if (std::is_same<T, double>::value)
+        SZ::Config conf;
+        if (D == 1)
         {
-            dataType = CUSZP_TYPE_DOUBLE;
+            conf = SZ::Config(shape[0]);
         }
-        else if (std::is_same<T, float>::value)
+        else if (D == 2)
         {
-            dataType = CUSZP_TYPE_FLOAT;
+            conf = SZ::Config(shape[0], shape[1]);
+        }
+        else if (D == 3)
+        {
+            conf = SZ::Config(shape[0], shape[1], shape[2]);
         }
         else
         {
-            std::cout << "wrong dtype\n";
+            std::cout << "wrong D\n";
             exit(-1);
         }
 
-        size_t data_size = 1;
-        for (int i = 0; i < D; i++)
-        {
-            data_size *= shape[i];
-        }
+        conf.errorBoundMode = SZ::EB_ABS;
+        conf.absErrorBound = tol;
+        conf.openmp = true;
 
-        T *d_oriData;
-        unsigned char *d_cmpBytes;
-        cudaMalloc((void **)&d_oriData, data_size * sizeof(T));
-        cudaMemcpy(d_oriData, original_data, sizeof(T) * data_size,
-                   cudaMemcpyHostToDevice);
-        cudaMalloc((void **)&d_cmpBytes, data_size * sizeof(T));
-
-        // Initializing CUDA Stream.
-        cudaStream_t stream;
-        cudaStreamCreate(&stream);
-
-        // d_oriData and d_cmpBytes are device pointers
-        cuSZp_compress(d_oriData, d_cmpBytes, data_size, &compressed_size, tol,
-                       dataType, encodingMode, stream);
-
+        char *cmp_data = SZ_compress(conf, original_data, compressed_size);
         compressed_data = malloc(compressed_size);
-        cudaMemcpy(compressed_data, d_cmpBytes, compressed_size,
-                   cudaMemcpyDeviceToHost);
-        cudaFree(d_oriData);
-        cudaFree(d_cmpBytes);
-        cudaStreamDestroy(stream);
+        memcpy(compressed_data, cmp_data, compressed_size);
+        delete[] cmp_data;
 
         return true;
     }
@@ -70,56 +51,41 @@ public:
                     void *compressed_data, size_t compressed_size,
                     void *&decompressed_data) override
     {
-        cuszp_type_t dataType;
-        // or we can use CUSZP_MODE_OUTLIER
-        cuszp_mode_t encodingMode = CUSZP_MODE_PLAIN;
-
-        if (std::is_same<T, double>::value)
+        SZ::Config conf;
+        size_t total_elems = 1;
+        if (D == 1)
         {
-            dataType = CUSZP_TYPE_DOUBLE;
+            conf = SZ::Config(shape[0]);
+            total_elems = shape[0];
         }
-        else if (std::is_same<T, float>::value)
+        else if (D == 2)
         {
-            dataType = CUSZP_TYPE_FLOAT;
+            conf = SZ::Config(shape[0], shape[1]);
+            total_elems = shape[0] * shape[1];
+        }
+        else if (D == 3)
+        {
+            conf = SZ::Config(shape[0], shape[1], shape[2]);
+            total_elems = shape[0] * shape[1] * shape[2];
         }
         else
         {
-            std::cout << "wrong dtype\n";
+            std::cout << "wrong D\n";
             exit(-1);
         }
 
-        size_t data_size = 1;
-        for (int i = 0; i < D; i++)
-        {
-            data_size *= shape[i];
-        }
+        conf.errorBoundMode = SZ::EB_ABS;
+        conf.absErrorBound = tol;
+        conf.openmp = true;
 
-        T *d_decData;
-        unsigned char *d_cmpBytes;
-        cudaMalloc((void **)&d_decData, data_size * sizeof(T));
-        cudaMalloc((void **)&d_cmpBytes, compressed_size);
+        decompressed_data = malloc(sizeof(T) * total_elems);
 
-        cudaMemcpy(d_cmpBytes, compressed_data, compressed_size,
-                   cudaMemcpyHostToDevice);
-
-        cudaStream_t stream;
-        cudaStreamCreate(&stream);
-
-        // d_cmpBytes and d_decData are device pointers
-        cuSZp_decompress(d_decData, d_cmpBytes, data_size, compressed_size, tol,
-                         dataType, encodingMode, stream);
-
-        decompressed_data = malloc(data_size * sizeof(T));
-        cudaMemcpy(decompressed_data, d_decData, data_size * sizeof(T),
-                   cudaMemcpyDeviceToHost);
-
-        cudaFree(d_decData);
-        cudaFree(d_cmpBytes);
-        cudaStreamDestroy(stream);
+        T *dec_data = (T *)decompressed_data;
+        SZ_decompress(conf, (char *)compressed_data, compressed_size, dec_data);
 
         return true;
     }
 };
 
 #endif
-// GPU_SZ_COMPRESSOR_HPP
+// CPU_SZ_COMPRESSOR_HPP

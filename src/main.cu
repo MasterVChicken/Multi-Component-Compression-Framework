@@ -137,6 +137,7 @@ void testProgressiveReconstructForBound(const std::string &name,
 
 int main()
 {
+    omp_set_num_threads(64);
     std::string filename =
         "/home/leonli/SDRBENCH/single_precision/SDRBENCH-EXASKY-NYX-512x512x512/temperature.f32";
     size_t numElements = 512 * 512 * 512;
@@ -180,33 +181,10 @@ int main()
         {"cuSZp", &cuszp},
         {"MGARD", &mgard}};
 
-    // for (auto &[name, comp] : compressors)
-    // {
-    //   testProgressiveComp(name, comp, D, shape, data, absTolList);
-    // }
-
     for (auto &[name, comp] : compressors)
     {
+        // testProgressiveComp(name, comp, D, shape, data, absTolList);
         testProgressiveReconstructForBound(name, comp, D, shape, data, absTolList);
     }
-
-    // Now we only need to test progressive compression but not reconstruction
-
-    // double desiredErrorBound = 0.1;
-    // int reqComps = progComp.requestComponentsForBound(desiredErrorBound);
-    // cout << "For error bound " << desiredErrorBound << ", load " << reqComps << " components." << endl;
-
-    // // Reconstruct data based on reqComps
-    // PRECISION *reconstructed = progComp.reconstructData(reqComps);
-    // if (!reconstructed)
-    // {
-    //   cerr << "Progressive reconstruction failed." << endl;
-    //   delete[] data;
-    //   return 1;
-    // }
-    // cout << "Reconstruction succeeded with " << reqComps << " components." << endl;
-
-    // delete[] data;
-    // delete[] reconstructed;
     return 0;
 }

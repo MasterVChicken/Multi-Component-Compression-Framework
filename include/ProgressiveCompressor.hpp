@@ -194,7 +194,7 @@ public:
     }
     for (int i = 0; i < m; i++)
     {
-      std::cout << "Component " << i + 1 << " has been used!" << std::endl;
+      // std::cout << "Component " << i + 1 << " has been used!" << std::endl;
       void *decompressed = nullptr;
 
       double dummyTol = 0;
