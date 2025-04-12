@@ -4,8 +4,6 @@
 #include "GeneralCompressor.hpp"
 #include <cuSZp.h>
 #include <cuda_runtime.h>
-// #include <omp.h>
-// omp_set_num_threads(24);
 
 template <typename T>
 class GPUSZCompressor : public GeneralCompressor<T>
