@@ -33,7 +33,6 @@ endif()
 if(${ENABLE_CUDA})
     set(CMAKE_CUDA_ARCHITECTURES 90)
 
-    
     include_directories(/home/leonli/cuSZp/install/include)
 
     enable_language(CUDA)
@@ -43,8 +42,7 @@ if(${ENABLE_CUDA})
     set(gpu_compressors_src
         "include/GPUMGARDCompressor.hpp"
         "include/GPUSZCompressor.hpp"
-        "include/GPUZFPCompressor.hpp"
-        )
+        "include/GPUZFPCompressor.hpp")
     
     set_source_files_properties(${gpu_compressors_src} PROPERTIES LANGUAGE CUDA)
     add_library(gpu-compressors ${gpu_compressors_src})

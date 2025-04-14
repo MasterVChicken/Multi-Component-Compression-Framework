@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#ifdef ENABLE_CUDA_COMPRESSOR
+#if defined(ENABLE_CUDA_COMPRESSOR) && ENABLE_CUDA_COMPRESSOR
 #include <cuda_runtime.h>
 #else
 #ifdef _OPENMP
