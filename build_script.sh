@@ -20,6 +20,6 @@ sz3_install_dir=/home/leonli/sz3-install
 
 mkdir -p build 
 cmake -S .  -B ./build \
-        -DENABLE_CUDA=ON\
+        -DENABLE_CUDA=OFF\
         -DCMAKE_PREFIX_PATH="${mgard_install_dir};${cuszp_install_dir};${zfp_install_dir_gpu};${zfp_install_dir_cpu};${sz3_install_dir}"
 cmake --build ./build

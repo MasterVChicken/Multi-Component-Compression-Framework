@@ -9,14 +9,12 @@
 
 // OPENMP
 
-template <typename T>
-class CPUZFPCompressor : public GeneralCompressor<T>
-{
+template <typename T> class CPUZFPCompressor : public GeneralCompressor<T> {
 public:
-  bool compress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape, double tol,
-                T *original_data, void *&compressed_data,
-                size_t &compressed_size) override
-  {
+  double compress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape, double tol,
+                  T *original_data, void *&compressed_data,
+                  size_t &compressed_size, bool include_copy_time) override {
+    auto t0 = std::chrono::high_resolution_clock::now();
     size_t original_size = 1;
     for (mgard_x::DIM i = 0; i < D; i++)
       original_size *= shape[i];
@@ -26,32 +24,22 @@ public:
       type = zfp_type_double;
     else if (std::is_same<T, float>::value)
       type = zfp_type_float;
-    else
-    {
+    else {
       std::cout << "wrong dtype\n";
       exit(-1);
     }
 
     zfp_field *field;
-    if (D == 1)
-    {
+    if (D == 1) {
       field = zfp_field_1d(original_data, type, shape[0]);
-    }
-    else if (D == 2)
-    {
+    } else if (D == 2) {
       field = zfp_field_2d(original_data, type, shape[1], shape[0]);
-    }
-    else if (D == 3)
-    {
+    } else if (D == 3) {
       field = zfp_field_3d(original_data, type, shape[2], shape[1], shape[0]);
-    }
-    else if (D == 4)
-    {
+    } else if (D == 4) {
       field = zfp_field_4d(original_data, type, shape[3], shape[2], shape[1],
                            shape[0]);
-    }
-    else
-    {
+    } else {
       std::cout << "wrong D\n";
       exit(-1);
     }
@@ -61,8 +49,7 @@ public:
 
     size_t bufsize = zfp_stream_maximum_size(zfp, field);
     void *buffer = malloc(bufsize);
-    if (!buffer)
-    {
+    if (!buffer) {
       std::cerr << "Failed to allocate memory for compression." << std::endl;
       exit(-1);
     }
@@ -73,15 +60,18 @@ public:
     zfp_stream_set_bit_stream(zfp, stream);
     zfp_stream_rewind(zfp);
 
-    if (!zfp_stream_set_execution(zfp, zfp_exec_omp))
-    {
+    if (!zfp_stream_set_execution(zfp, zfp_exec_omp)) {
       std::cout << "zfp-openmp not available\n";
       exit(-1);
     }
 
+    auto t1 = std::chrono::high_resolution_clock::now();
+
     compressed_size = zfp_compress(zfp, field);
-    if (compressed_size == 0)
-    {
+
+    auto t2 = std::chrono::high_resolution_clock::now();
+
+    if (compressed_size == 0) {
       std::cout << "zfp compress error\n";
       exit(-1);
     }
@@ -90,13 +80,20 @@ public:
     zfp_stream_close(zfp);
     stream_close(stream);
 
-    return true;
+    double elapsed_time;
+    if (include_copy_time) {
+      elapsed_time = std::chrono::duration<double>(t2 - t0).count();
+    } else {
+      elapsed_time = std::chrono::duration<double>(t2 - t1).count();
+    }
+
+    return elapsed_time;
   }
 
-  bool decompress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape, double tol,
-                  void *compressed_data, size_t compressed_size,
-                  void *&decompressed_data) override
-  {
+  double decompress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape,
+                    double tol, void *compressed_data, size_t compressed_size,
+                    void *&decompressed_data, bool include_copy_time) override {
+
     size_t original_size = 1;
     for (mgard_x::DIM i = 0; i < D; i++)
       original_size *= shape[i];
@@ -108,8 +105,7 @@ public:
       type = zfp_type_double;
     else if (std::is_same<T, float>::value)
       type = zfp_type_float;
-    else
-    {
+    else {
       std::cout << "wrong dtype\n";
       exit(-1);
     }
@@ -126,8 +122,7 @@ public:
     else if (D == 4)
       field = zfp_field_4d(static_cast<T *>(decompressed_data), type, shape[3],
                            shape[2], shape[1], shape[0]);
-    else
-    {
+    else {
       std::cout << "wrong D\n";
       exit(-1);
     }
@@ -139,15 +134,18 @@ public:
     zfp_stream_set_bit_stream(zfp, stream);
     zfp_stream_rewind(zfp);
 
-    if (!zfp_stream_set_execution(zfp, zfp_exec_serial))
-    {
+    if (!zfp_stream_set_execution(zfp, zfp_exec_serial)) {
       std::cout << "zfp-serial not available\n";
       exit(-1);
     }
 
+    auto t0 = std::chrono::high_resolution_clock::now();
+
     int status = zfp_decompress(zfp, field);
-    if (!status)
-    {
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    if (!status) {
       std::cout << "zfp decompress error\n";
       exit(-1);
     }
@@ -156,7 +154,9 @@ public:
     zfp_stream_close(zfp);
     stream_close(stream);
 
-    return true;
+    double elapsed_time = std::chrono::duration<double>(t1 - t0).count();
+
+    return elapsed_time;
   }
 };
 
