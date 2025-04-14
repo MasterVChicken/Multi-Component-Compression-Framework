@@ -2,75 +2,129 @@
 #define GPU_MGARD_COMPRESSOR_HPP
 
 #include "GeneralCompressor.hpp"
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <vector>
 
-template <typename T>
-class GPUMGARDCompressor : public GeneralCompressor<T>
-{
+#include "mgard/compress_x.hpp"
+
+template <typename T> class GPUMGARDCompressor : public GeneralCompressor<T> {
 public:
-  bool compress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape, double tol,
-                T *original_data, void *&compressed_data,
-                size_t &compressed_size) override
-  {
+  double compress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape, double tol,
+                  T *original_data, void *&compressed_data,
+                  size_t &compressed_size, bool include_copy_time) override {
+    auto t0 = std::chrono::high_resolution_clock::now();
     mgard_x::Config config;
     config.dev_type = mgard_x::device_type::CUDA;
-    // config.dev_type = mgard_x::device_type::SERIAL;
 
-    double s;
-    s = std::numeric_limits<float>::infinity();
+    double s = std::numeric_limits<float>::infinity();
 
     mgard_x::data_type dtype;
-    if (std::is_same<T, double>::value)
-    {
+    if (std::is_same<T, double>::value) {
       dtype = mgard_x::data_type::Double;
-    }
-    else if (std::is_same<T, float>::value)
-    {
+    } else if (std::is_same<T, float>::value) {
       dtype = mgard_x::data_type::Float;
-    }
-    else
-    {
-      std::cout << "wrong dtype\n";
-      exit(-1);
+    } else {
+      std::cerr << "Unsupported data type for MGARD\n";
+      std::exit(EXIT_FAILURE);
     }
 
-    // By default we use ABS error and L-infinity norm
+    size_t original_size = 1;
+    for (mgard_x::DIM i = 0; i < D; i++) {
+      original_size *= shape[i];
+    }
+
+    T *d_original_data;
+    cudaMalloc((void **)&d_original_data, original_size * sizeof(T));
+    cudaMemcpy(d_original_data, original_data, original_size * sizeof(T),
+               cudaMemcpyHostToDevice);
+    void *compressed_array_gpu = nullptr;
+    cudaMalloc((void **)&compressed_array_gpu, original_size * sizeof(T) + 1e6);
+    compressed_size = original_size + 1e6;
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+
     mgard_x::compress_status_type status = mgard_x::compress(
-        D, dtype, shape, tol, s, mgard_x::error_bound_type::ABS, original_data,
-        compressed_data, compressed_size, config, false);
+        D, dtype, shape, tol, s, mgard_x::error_bound_type::ABS,
+        d_original_data, compressed_array_gpu, compressed_size, config, true);
 
-    if (status != mgard_x::compress_status_type::Success)
-    {
+    auto t2 = std::chrono::high_resolution_clock::now();
+
+    if (status != mgard_x::compress_status_type::Success) {
       std::cerr << "MGARD compress failed with status "
                 << static_cast<int>(status) << std::endl;
-      return false;
+      std::exit(EXIT_FAILURE);
     }
-    return true;
+
+    compressed_data = malloc(compressed_size);
+    cudaMemcpy(compressed_data, compressed_array_gpu, compressed_size,
+               cudaMemcpyDeviceToHost);
+    cudaFree(d_original_data);
+    cudaFree(compressed_array_gpu);
+
+    double elapsed_time;
+    if (include_copy_time) {
+      elapsed_time = std::chrono::duration<double>(t2 - t0).count();
+    } else {
+      elapsed_time = std::chrono::duration<double>(t2 - t1).count();
+    }
+
+    return elapsed_time;
   }
 
-  bool decompress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape, double tol,
-                  void *compressed_data, size_t compressed_size,
-                  void *&decompressed_data) override
-  {
+  double decompress(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape,
+                    double tol, void *compressed_data, size_t compressed_size,
+                    void *&decompressed_data, bool include_copy_time) override {
     mgard_x::Config config;
     config.dev_type = mgard_x::device_type::CUDA;
-    // config.dev_type = mgard_x::device_type::SERIAL;
 
-    mgard_x::compress_status_type status = mgard_x::decompress(
-        compressed_data, compressed_size, decompressed_data, config, false);
-    if (status != mgard_x::compress_status_type::Success)
-    {
+    size_t original_size = 1;
+    for (mgard_x::DIM i = 0; i < D; i++) {
+      original_size *= shape[i];
+    }
+
+    void *compressed_array_gpu;
+    cudaMalloc((void **)&compressed_array_gpu, compressed_size);
+    cudaMemcpy(compressed_array_gpu, compressed_data, compressed_size,
+               cudaMemcpyHostToDevice);
+    void *d_decompressed_data;
+    cudaMalloc((void **)&d_decompressed_data, original_size * sizeof(T));
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+
+    mgard_x::compress_status_type status =
+        mgard_x::decompress(compressed_array_gpu, compressed_size,
+                            d_decompressed_data, config, true);
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    if (status != mgard_x::compress_status_type::Success) {
       std::cerr << "MGARD decompress failed with status "
                 << static_cast<int>(status) << std::endl;
-      return false;
+      std::exit(EXIT_FAILURE);
     }
-    return true;
+
+    decompressed_data = malloc(original_size * sizeof(T));
+    cudaMemcpy(decompressed_data, d_decompressed_data,
+               original_size * sizeof(T), cudaMemcpyDeviceToHost);
+
+    cudaFree(compressed_array_gpu);
+    cudaFree(d_decompressed_data);
+
+    auto t2 = std::chrono::high_resolution_clock::now();
+
+    double elapsed_time;
+    if (include_copy_time) {
+      elapsed_time = std::chrono::duration<double>(t2 - t0).count();
+    } else {
+      elapsed_time = std::chrono::duration<double>(t1 - t0).count();
+    }
+
+    return elapsed_time;
   }
 };
 
-#endif
-// GPU_MGARD_COMPRESSOR_HPP
+#endif // GPU_MGARD_COMPRESSOR_HPP

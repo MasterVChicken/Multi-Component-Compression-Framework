@@ -18,6 +18,7 @@
 using namespace std;
 
 // Modify when using different precision
+// using PRECISION = float;
 using PRECISION = float;
 
 PRECISION *readFile(const std::string &filename, size_t &numElements) {
@@ -56,9 +57,7 @@ void testProgressiveComp(const std::string &name,
 
   ProgressiveCompressor<T> prog(D, shape, compressor);
 
-  auto t0 = std::chrono::high_resolution_clock::now();
   bool ok = prog.compressData(data, absTolList.data(), absTolList.size());
-  auto t1 = std::chrono::high_resolution_clock::now();
 
   if (!ok) {
     std::cerr << "[FAIL] Progressive compression failed." << std::endl;
@@ -101,36 +100,47 @@ void testProgressiveReconstructForBound(const std::string &name,
   }
 
   std::ofstream out("result_reconstruct_bound_" + name + ".csv");
-  out << "Index,TargetTolerance,RequiredComponents,ReconstructTime(s)\n";
+  out << "Component,TargetTolerance,DecompressionTime(s)\n";
 
+  // 对于每个容差目标，进行重构并获取每个组件的 incremental decompression time
   for (int i = 0; i < absTolList.size(); i++) {
     double targetTol = absTolList[i];
     int reqComps = prog.requestComponentsForBound(targetTol);
-    auto t0 = std::chrono::high_resolution_clock::now();
+    // 调用 reconstructData，内部会记录每个组件的解压时间
     PRECISION *reconstructed = prog.reconstructData(reqComps);
-    auto t1 = std::chrono::high_resolution_clock::now();
-    double recTime = std::chrono::duration<double>(t1 - t0).count();
-
     if (reconstructed == nullptr) {
       std::cerr << "[FAIL] Reconstruction failed for target tolerance "
                 << targetTol << std::endl;
-    } else {
-      std::cout << "Target tolerance " << targetTol
-                << ": required components = " << reqComps
-                << ", reconstruction time = " << recTime << " s" << std::endl;
-      delete[] reconstructed;
+      continue;
     }
-    out << i + 1 << "," << targetTol << "," << reqComps << "," << recTime
-        << "\n";
+    delete[] reconstructed;
+
+    // 从 ProgressiveCompressor 获取每个组件的解压时间
+    const std::vector<double> &compTimes =
+        prog.getComponentDecompressionTimes();
+    for (size_t comp = 0; comp < compTimes.size(); comp++) {
+      out << comp + 1 << "," << targetTol << "," << compTimes[comp] << "\n";
+    }
   }
   out.close();
 }
 
 int main() {
   omp_set_num_threads(64);
-  std::string filename = "/home/leonli/SDRBENCH/single_precision/"
-                         "SDRBENCH-EXASKY-NYX-512x512x512/temperature.f32";
-  size_t numElements = 512 * 512 * 512;
+
+  // std::string filename =
+  // "/home/leonli/SDRBENCH/single_precision/SDRBENCH-EXASKY-NYX-512x512x512/temperature.f32"
+  std::string filename =
+      "/home/leonli/SDRBENCH/single_precision/SDRBENCH-Hurricane-100x500x500/"
+      "100x500x500/Pf48.bin.f32";
+  // std::string filename = "/home/leonli/SDRBENCH/single_precision/"
+  //                        "SDRBENCH-SCALE_98x1200x1200/PRES-98x1200x1200.f32";
+  // std::string filename = "/home/leonli/SDRBENCH/double_precision/"
+  //                        "SDRBENCH-Miranda-256x384x384/velocityz.d64";
+  // size_t numElements = 512 * 512 * 512;
+  size_t numElements = 100 * 500 * 500;
+  // size_t numElements = 98 * 1200 * 1200;
+  // size_t numElements = 256 * 384 * 384;
   PRECISION *data = readFile(filename, numElements);
   if (data == nullptr) {
     std::cerr << "Failed to read file." << std::endl;
@@ -138,13 +148,22 @@ int main() {
   }
 
   mgard_x::DIM D = 3;
-  std::vector<mgard_x::SIZE> shape = {512, 512, 512};
+  // std::vector<mgard_x::SIZE> shape = {512, 512, 512};
+  std::vector<mgard_x::SIZE> shape = {500, 500, 100};
+  // std::vector<mgard_x::SIZE> shape = {1200, 1200, 98};
+  // std::vector<mgard_x::SIZE> shape = {384, 384, 256};
   const int nComponents = 11;
   std::vector<double> relTolList = {1e-1, 5e-2, 1e-2, 5e-3, 1e-3, 5e-4,
                                     1e-4, 5e-5, 1e-5, 5e-6, 1e-6};
 
-  // Look up on SDRBENCH for official dataset property for temperature.f32
-  double valueRange = 4780302.524170;
+  // temperature.f32 in NYX
+  // double valueRange = 101820.218750;
+  // Pf48.bin.f32 in ISABELLA
+  double valueRange = 3224.397949;
+  // PRES in SCALE-LETKF
+  // double valueRange = 101820.218750;
+  // velocityz.d64 in Miranda
+  // double valueRange = 8.996110;
 
   std::vector<double> absTolList(nComponents);
   for (int i = 0; i < nComponents; i++) {
@@ -163,15 +182,15 @@ int main() {
       compressors;
 
 #if ENABLE_CUDA_COMPRESSOR
-  compressors.emplace_back("MGARD", &mgard);
   compressors.emplace_back("ZFP_GPU", &zfp_gpu);
+  compressors.emplace_back("MGARD", &mgard);
   compressors.emplace_back("cuSZp", &cuszp);
 #endif
   compressors.emplace_back("SZ3_CPU", &sz_cpu);
   compressors.emplace_back("ZFP_CPU", &zfp_cpu);
 
   for (auto &[name, comp] : compressors) {
-    // testProgressiveComp(name, comp, D, shape, data, absTolList);
+    testProgressiveComp(name, comp, D, shape, data, absTolList);
     testProgressiveReconstructForBound(name, comp, D, shape, data, absTolList);
   }
 
