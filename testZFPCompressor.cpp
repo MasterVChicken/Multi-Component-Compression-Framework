@@ -1,6 +1,5 @@
-#include "CPUSZCompressor.hpp"
-#include "CPUZFPCompressor.hpp"
-#include "ProgressiveCompressor.hpp"
+#include "GPUZFPCompressor.hpp"
+#include "ProgressiveCompressorGPUZFP.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -13,11 +12,7 @@
 #include <string>
 #include <vector>
 
-#if ENABLE_CUDA_COMPRESSOR
-#include "GPUMGARDCompressor.hpp"
-#include "GPUSZCompressor.hpp"
-#include "GPUZFPCompressor.hpp"
-#endif
+
 
 using namespace std;
 
@@ -31,7 +26,7 @@ void print_usage_message(const std::string &error) {
          "  -n <ndim> <dim1> <dim2> ... <dimN>    : number of dimensions and "
          "dims (space separated)\n"
          "  -ECount <error count>                 : number of errors\n"
-         "  -E <error1> <error2> ... <errorN>     : error list (space "
+         "  -E <error count> <error1> <error2> ... <errorN>     : error list (space "
          "separated)\n"
          "  -p <s|d>                              : precision (s: single, d: "
          "double)\n"
@@ -135,10 +130,12 @@ template <typename T>
 void testProgressiveComp(const std::string &name,
                          GeneralCompressor<T> *compressor, mgard_x::DIM D,
                          const std::vector<mgard_x::SIZE> &shape, T *data,
-                         const std::vector<double> &absTolList) {
+                         const std::vector<double> &absTolList, std::string filename) {
   std::cout << "\n=== Testing " << name << " ===\n";
   ProgressiveCompressor<T> prog(D, shape, compressor);
+
   bool ok = prog.compressData(data, absTolList.data(), absTolList.size());
+
   if (!ok) {
     std::cerr << "[FAIL] Progressive compression failed." << std::endl;
     return;
@@ -150,49 +147,54 @@ void testProgressiveComp(const std::string &name,
               << ", compress time = " << compTime << " s"
               << ", size = " << compSize << " bytes" << std::endl;
   }
-  std::ofstream out("result_" + name + ".csv");
+  std::ofstream out("result_" + name + ".csv", std::ios::app);
+  out << "Results for file: " << filename << "\n";
   out << "Index,Tolerance,Time(s),CompressedSize(Bytes)\n";
   for (int i = 0; i < prog.getNumComponents(); i++) {
     out << i + 1 << "," << absTolList[i] << ","
         << prog.getComponentCompressTime(i) << "," << prog.getCompressedSize(i)
         << "\n";
   }
+  double refactorTime = 0;
+  for (int i = 0; i < prog.getNumComponents(); i++) {
+    refactorTime += prog.getComponentCompressTime(i);
+  }
+  out << "Refactor Time " << refactorTime << "\n";
   out.close();
 }
 
 template <typename T>
-void testProgressiveReconstructForBound(const std::string &name,
+void testFullProgressiveReconstruct(const std::string &name,
                                         GeneralCompressor<T> *compressor,
                                         mgard_x::DIM D,
                                         const std::vector<mgard_x::SIZE> &shape,
                                         T *data,
-                                        const std::vector<double> &absTolList) {
+                                        const std::vector<double> &relTolList, std::string filename) {
   std::cout << "\n=== Testing Reconstruction for Error Bounds (" << name
             << ") ===\n";
   ProgressiveCompressor<T> prog(D, shape, compressor);
-  bool ok = prog.compressData(data, absTolList.data(), absTolList.size());
+  bool ok = prog.compressData(data, relTolList.data(), relTolList.size());
   if (!ok) {
     std::cerr << "[FAIL] Progressive compression failed." << std::endl;
     return;
   }
-  std::ofstream out("result_reconstruct_bound_" + name + ".csv");
+  std::ofstream out("result_reconstruct_bound_" + name + ".csv", std::ios::app);
+  out << "Results for file: " << filename << "\n";
   out << "Component,TargetTolerance,DecompressionTime(s)\n";
-  for (int i = 0; i < absTolList.size(); i++) {
-    double targetTol = absTolList[i];
-    int reqComps = prog.requestComponentsForBound(targetTol);
-    T *reconstructed = prog.reconstructData(reqComps);
-    if (reconstructed == nullptr) {
-      std::cerr << "[FAIL] Reconstruction failed for target tolerance "
-                << targetTol << std::endl;
-      continue;
-    }
-    delete[] reconstructed;
-    const std::vector<double> &compTimes =
-        prog.getComponentDecompressionTimes();
-    for (size_t comp = 0; comp < compTimes.size(); comp++) {
-      out << comp + 1 << "," << targetTol << "," << compTimes[comp] << "\n";
-    }
+
+  T *reconstructed = prog.reconstructData(relTolList.size());
+  if (reconstructed == nullptr) {
+    std::cerr << "[FAIL] Reconstruction failed for target tolerance"
+              << std::endl;
+    exit(-1);
   }
+  delete[] reconstructed;
+  const std::vector<double> &compTimes = prog.getComponentDecompressionTimes();
+  for (size_t comp = 0; comp < compTimes.size(); comp++) {
+    out << comp + 1 << "," << relTolList[comp] << "," << compTimes[comp]
+        << "\n";
+  }
+
   out.close();
 }
 
@@ -206,8 +208,8 @@ template <typename T> int run_test(int argc, char *argv[]) {
 
   int errorCount = get_arg_int(argc, argv, "-ECount");
 
-  std::vector<double> absTolList = get_arg_dims<double>(argc, argv, "-E");
-  if ((int)absTolList.size() != errorCount) {
+  std::vector<double> relTolList = get_arg_dims<double>(argc, argv, "-E");
+  if ((int)relTolList.size() != errorCount) {
     std::cerr << "Error: error count does not match number of error values "
                  "provided.\n";
     exit(1);
@@ -220,18 +222,18 @@ template <typename T> int run_test(int argc, char *argv[]) {
     exit(1);
   }
 
-  CPUSZCompressor<T> sz_cpu;
-  CPUZFPCompressor<T> zfp_cpu;
   std::vector<std::pair<std::string, GeneralCompressor<T> *>> compressors;
-  compressors.push_back(std::make_pair("SZ3_CPU", &sz_cpu));
-  compressors.push_back(std::make_pair("ZFP_CPU", &zfp_cpu));
+
+  GPUZFPCompressor<T> zfp_gpu;
+  
+  compressors.push_back(std::make_pair("ZFP_GPU", &zfp_gpu));
 
   for (auto &p : compressors) {
     std::cout << "\n========================================\n";
     std::cout << "Testing compressor: " << p.first << "\n";
-    testProgressiveComp<T>(p.first, p.second, D, shape, data, absTolList);
-    testProgressiveReconstructForBound<T>(p.first, p.second, D, shape, data,
-                                          absTolList);
+    testProgressiveComp<T>(p.first, p.second, D, shape, data, relTolList,filename);
+    testFullProgressiveReconstruct<T>(p.first, p.second, D, shape, data,
+                                          relTolList,filename);
   }
   delete[] data;
   return 0;

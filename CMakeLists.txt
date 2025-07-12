@@ -5,20 +5,14 @@ project(ProgressiveCompression CXX C CUDA)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
 find_package(mgard)
 find_package(zfp REQUIRED)
 find_package(SZ3 REQUIRED)
 
-
-
-
-option(ENABLE_CUDA "Enable CUDA compressors." OFF)
-
-
-
+# Compile CPU Compressors
+option(ENABLE_CUDA "Enable CUDA compressors." ON)
 
 add_library(cpu-compressors INTERFACE)
 target_include_directories(cpu-compressors INTERFACE ${PROJECT_SOURCE_DIR}/include)
@@ -29,35 +23,56 @@ if(OpenMP_CXX_FOUND)
   target_link_libraries(cpu-compressors INTERFACE OpenMP::OpenMP_CXX)
 endif()
 
+add_executable(ProgressiveCompressionCPU testCPUCompressors.cpp)
+target_link_libraries(ProgressiveCompressionCPU cpu-compressors)
 
-if(${ENABLE_CUDA})
-    set(CMAKE_CUDA_ARCHITECTURES 90)
-
-    include_directories(/home/leonli/cuSZp/install/include)
-
-    enable_language(CUDA)
-    find_package(cuSZp REQUIRED)
-    add_compile_definitions(ENABLE_CUDA_COMPRESSOR=1)
-    
-    set(gpu_compressors_src
-        "include/GPUMGARDCompressor.hpp"
-        "include/GPUSZCompressor.hpp"
-        "include/GPUZFPCompressor.hpp")
-    
-    set_source_files_properties(${gpu_compressors_src} PROPERTIES LANGUAGE CUDA)
-    add_library(gpu-compressors ${gpu_compressors_src})
-    target_link_libraries(gpu-compressors PUBLIC mgard::mgard cuSZp::cuSZp_shared zfp::zfp)
-    set_target_properties(gpu-compressors PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-    
-    add_executable(ProgressiveCompression main.cpp)
-    target_link_libraries(ProgressiveCompression gpu-compressors cpu-compressors)
-else()
-    add_compile_definitions(ENABLE_CUDA_COMPRESSOR=0)
-    add_executable(ProgressiveCompression main.cpp)
-    target_link_libraries(ProgressiveCompression cpu-compressors)
-endif()
-
-target_compile_options(ProgressiveCompression PRIVATE
+target_compile_options(ProgressiveCompressionCPU PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options -fopenmp>
     $<$<COMPILE_LANGUAGE:CXX>:-fopenmp>
+)
+
+# -------------------------------
+# GPU Compressors + Executables
+# -------------------------------
+enable_language(CUDA)
+set(CMAKE_CUDA_ARCHITECTURES 90)
+
+# Compressors only (no test .cpp)
+set(gpu_compressors_src
+    include/GPUMGARDCompressor.hpp
+    include/GPUZFPCompressor.hpp
+)
+set_source_files_properties(${gpu_compressors_src} PROPERTIES LANGUAGE CUDA)
+
+add_library(gpu-compressors ${gpu_compressors_src})
+target_link_libraries(gpu-compressors PUBLIC mgard::mgard zfp::zfp)
+target_include_directories(gpu-compressors PUBLIC ${PROJECT_SOURCE_DIR}/include)
+set_target_properties(gpu-compressors PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    POSITION_INDEPENDENT_CODE ON
+)
+
+
+# -------------------------------
+# GPU Executables (test .cpp files)
+# -------------------------------
+# MGARD
+set_source_files_properties(testMGARDCompressor.cpp PROPERTIES LANGUAGE CUDA)
+add_executable(ProgressiveCompressionGPUMGARD testMGARDCompressor.cpp)
+target_link_libraries(ProgressiveCompressionGPUMGARD gpu-compressors)
+target_include_directories(ProgressiveCompressionGPUMGARD PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_compile_options(gpu-compressors PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options -fPIC>
+    $<$<COMPILE_LANGUAGE:CXX>:-fPIC>
+)
+
+
+# ZFP
+set_source_files_properties(testZFPCompressor.cpp PROPERTIES LANGUAGE CUDA)
+add_executable(ProgressiveCompressionGPUZFP testZFPCompressor.cpp)
+target_link_libraries(ProgressiveCompressionGPUZFP gpu-compressors)
+target_include_directories(ProgressiveCompressionGPUZFP PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_compile_options(gpu-compressors PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options -fPIC>
+    $<$<COMPILE_LANGUAGE:CXX>:-fPIC>
 )

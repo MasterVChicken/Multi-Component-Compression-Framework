@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "mgard/compress_x.hpp"
+#include <cuda_runtime.h>
 
 template <typename T> class GPUMGARDCompressor : public GeneralCompressor<T> {
 public:
@@ -42,8 +43,9 @@ public:
     cudaMemcpy(d_original_data, original_data, original_size * sizeof(T),
                cudaMemcpyHostToDevice);
     void *compressed_array_gpu = nullptr;
-    cudaMalloc((void **)&compressed_array_gpu, original_size * sizeof(T) + 1e6);
-    compressed_size = original_size + 1e6;
+    // If needed, we need expand this buffer size
+    cudaMalloc((void **)&compressed_array_gpu, original_size * sizeof(T) + 1e9);
+    compressed_size = original_size + 1e9;
 
     auto t1 = std::chrono::high_resolution_clock::now();
 

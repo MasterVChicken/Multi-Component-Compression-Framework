@@ -1,7 +1,8 @@
-#ifndef PROGRESSIVE_COMPRESSOR_HPP
-#define PROGRESSIVE_COMPRESSOR_HPP
+#ifndef PROGRESSIVE_COMPRESSOR_GPU_MGARD_HPP
+#define PROGRESSIVE_COMPRESSOR_GPU_MGARD_HPP
 
-#include "GeneralCompressor.hpp"
+#include <cuda_runtime.h>
+
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -12,16 +13,8 @@
 #include <string>
 #include <vector>
 
-#if defined(ENABLE_CUDA_COMPRESSOR) && ENABLE_CUDA_COMPRESSOR
-#include <cuda_runtime.h>
-#else
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-#endif
+#include "GeneralCompressor.hpp"
 
-#if defined(ENABLE_CUDA_COMPRESSOR) && ENABLE_CUDA_COMPRESSOR &&               \
-    defined(__CUDACC__)
 template <typename T>
 __global__ void computeErrorKernel(const T *d_orig, const T *d_xTilde,
                                    T *d_error, size_t n) {
@@ -84,26 +77,9 @@ void launchAccumulateKernel(T *h_result, T *h_decompressed, size_t n) {
   cudaFree(d_decompressed);
 }
 
-#else
 template <typename T>
-void launchComputeErrorCPU(const T *h_orig, T *h_xTilde, T *h_error, size_t n) {
-#pragma omp parallel for
-  for (size_t idx = 0; idx < n; idx++) {
-    h_error[idx] = h_orig[idx] - h_xTilde[idx];
-  }
-}
-
-template <typename T>
-void launchAccumulateCPU(T *h_result, T *h_decompressed, size_t n) {
-#pragma omp parallel for
-  for (size_t idx = 0; idx < n; idx++) {
-    h_result[idx] += h_decompressed[idx];
-  }
-}
-#endif
-
-template <typename T> class ProgressiveCompressor {
-public:
+class ProgressiveCompressor {
+ public:
   struct Component {
     void *compressed_data;
     size_t compressed_size;
@@ -112,8 +88,12 @@ public:
 
   ProgressiveCompressor(mgard_x::DIM D, std::vector<mgard_x::SIZE> shape,
                         GeneralCompressor<T> *compressor)
-      : D_(D), shape_(shape), compressor_(compressor), num_components_(0),
-        xTilde_(nullptr), n_(0) {}
+      : D_(D),
+        shape_(shape),
+        compressor_(compressor),
+        num_components_(0),
+        xTilde_(nullptr),
+        n_(0) {}
 
   ~ProgressiveCompressor() {
     for (int i = 0; i < num_components_; i++) {
@@ -126,7 +106,7 @@ public:
     }
   }
 
-  bool compressData(const T *original_data, const double *toleranceList,
+  bool compressData(const T *original_data, const double *relToleranceList,
                     int nComponents) {
     n_ = 1;
     for (int i = 0; i < D_; i++) {
@@ -142,63 +122,56 @@ public:
     compressTimes_.resize(nComponents, 0.0);
     num_components_ = nComponents;
 
+    // Not norm of error. It should be norm of original value
+    T l_inf_norm = 0.0;
+    for (size_t i = 0; i < n_; i++) {
+      l_inf_norm = std::max(l_inf_norm, std::fabs(original_data[i]));
+    }
+
     for (int compIdx = 0; compIdx < nComponents; compIdx++) {
-      double tol = toleranceList[compIdx];
+      double rel_tol = relToleranceList[compIdx];
       T *error = new T[n_];
 
-#if defined(ENABLE_CUDA_COMPRESSOR) && ENABLE_CUDA_COMPRESSOR &&               \
-    defined(__CUDACC__)
       launchComputeErrorKernel<T>(original_data, xTilde_, error, n_);
-#else
-      launchComputeErrorCPU<T>(original_data, xTilde_, error, n_);
-#endif
 
-      T max_residual = 0.0;
-      for (size_t i = 0; i < n_; i++) {
-        max_residual = std::max(max_residual, std::fabs(error[i]));
-      }
-      // std::cout << "[Comp " << compIdx + 1
-      //           << "] Residual max = " << max_residual << ", tol = " << tol
-      //           << std::endl;
+      double abs_tol = l_inf_norm * rel_tol;
 
       void *comp_data = nullptr;
       size_t comp_size = 0;
       double comp_time = compressor_->compress(
-          D_, shape_, tol, error, comp_data, comp_size, compIdx == 0);
+          D_, shape_, abs_tol, error, comp_data, comp_size, compIdx == 0);
 
       delete[] error;
 
       components_[compIdx].compressed_data = comp_data;
       components_[compIdx].compressed_size = comp_size;
-      components_[compIdx].tol = tol;
+      components_[compIdx].tol = rel_tol;
 
       void *decompressed = nullptr;
       double decomp_time =
-          compressor_->decompress(D_, shape_, tol, comp_data, comp_size,
+          compressor_->decompress(D_, shape_, abs_tol, comp_data, comp_size,
                                   decompressed, compIdx == nComponents - 1);
 
       compressTimes_[compIdx] = comp_time + decomp_time;
 
       T *decompressed_data = static_cast<T *>(decompressed);
-      T max_xi = 0.0;
-      for (size_t j = 0; j < n_; j++) {
-        max_xi = std::max(max_xi, std::fabs(decompressed_data[j]));
-      }
-      // std::cout << "[Comp " << compIdx + 1 << "] Max |x_i| = " << max_xi
-      //           << std::endl;
+
+      // // Only for parameter tuning
+      // // compute actual relative error
+      // T max_actual_error = 0.0;
+      // for (size_t j = 0; j < n_; j++) {
+      //   T actual =
+      //       std::fabs(original_data[j] - (xTilde_[j] + decompressed_data[j]));
+      //   max_actual_error = std::max(max_actual_error, actual);
+      // }
+      // double actual_rel_error = max_actual_error / l_inf_norm;
+      // std::cout << "[Component " << compIdx + 1
+      //           << "] Actual max abs error = " << max_actual_error
+      //           << ", actual rel error = " << actual_rel_error << std::endl;
 
       for (size_t j = 0; j < n_; j++) {
         xTilde_[j] += decompressed_data[j];
       }
-
-      T maxErr = 0.0;
-      for (size_t j = 0; j < n_; j++) {
-        T diff = std::fabs(original_data[j] - xTilde_[j]);
-        if (diff > maxErr)
-          maxErr = diff;
-      }
-      // std::cout << "Component " << compIdx + 1 << ": max error = " << maxErr
-      //           << ", tol = " << tol << std::endl;
 
       delete[] decompressed_data;
     }
@@ -206,8 +179,7 @@ public:
   }
 
   T *reconstructData(int m) {
-    if (m > num_components_)
-      m = num_components_;
+    if (m > num_components_) m = num_components_;
     T *result = new T[n_];
     std::fill(result, result + n_, 0.0);
 
@@ -221,9 +193,6 @@ public:
       compressor_->decompress(D_, shape_, tol, components_[i].compressed_data,
                               components_[i].compressed_size, decompressed,
                               false);
-      auto t1 = std::chrono::high_resolution_clock::now();
-      double dt = std::chrono::duration<double>(t1 - t0).count();
-      component_decomp_times_[i] = dt;
 
       if (!decompressed) {
         std::cerr << "[Warning] decompress() returned nullptr at component "
@@ -231,13 +200,13 @@ public:
         continue;
       }
       T *decompressed_data = static_cast<T *>(decompressed);
-#if defined(ENABLE_CUDA_COMPRESSOR) && ENABLE_CUDA_COMPRESSOR &&               \
-    defined(__CUDACC__)
       launchAccumulateKernel<T>(result, decompressed_data, n_);
-#else
-      launchAccumulateCPU<T>(result, decompressed_data, n_);
-#endif
       delete[] decompressed_data;
+
+      auto t1 = std::chrono::high_resolution_clock::now();
+      double dt = std::chrono::duration<double>(t1 - t0).count();
+      component_decomp_times_[i] = dt;
+
       if (m == num_components_) {
         std::cout << "Component " << i + 1
                   << ": incremental decompression time = " << dt << " s"
@@ -251,39 +220,19 @@ public:
     return component_decomp_times_;
   }
 
-  T *reconstructData(double reqTol) {
-    int m = requestComponentsForBound(reqTol);
-    return reconstructData(m);
-  }
-
   int getNumComponents() const { return num_components_; }
 
   size_t getCompressedSize(int componentIdx) const {
-    if (componentIdx < 0 || componentIdx >= num_components_)
-      return 0;
+    if (componentIdx < 0 || componentIdx >= num_components_) return 0;
     return components_[componentIdx].compressed_size;
   }
 
   double getComponentCompressTime(int idx) const {
-    if (idx < 0 || idx >= compressTimes_.size())
-      return 0;
+    if (idx < 0 || idx >= compressTimes_.size()) return 0;
     return compressTimes_[idx];
   }
 
-  int requestComponentsForBound(double reqBound) {
-    int requiredComponents = 0;
-    for (int i = 0; i < num_components_; ++i) {
-      if (components_[i].tol <= reqBound) {
-        requiredComponents = i + 1;
-        break;
-      }
-    }
-    if (requiredComponents == 0)
-      requiredComponents = num_components_;
-    return requiredComponents;
-  }
-
-private:
+ private:
   GeneralCompressor<T> *compressor_;
   std::vector<Component> components_;
   std::vector<double> compressTimes_;
@@ -296,4 +245,4 @@ private:
   std::vector<double> component_decomp_times_;
 };
 
-#endif // PROGRESSIVE_COMPRESSOR_HPP
+#endif  // PROGRESSIVE_COMPRESSOR_GPU_MGARD_HPP
