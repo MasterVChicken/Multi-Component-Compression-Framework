@@ -47,6 +47,6 @@ Each result section begins with **Results for file**:, indicating the dataset be
 - Tolerance: The fixed-rate (or error bound) used for that component.
 - Decompression Time(s): The incremental time taken to progressive decompress to satisfy current tolerance.
 
-**How to read result from file 1**
+**How to read result from file 2**
 - The decompression time per component allows you to observe the incremental time to progressive reconstruct to current tolerance.
 
