@@ -1,15 +1,19 @@
 # Multi-Component-Compression-Framework
 
-GPU Compressor: MGARD(1.5.2), ZFP(1.0.0)
+GPU Compressor: 
+- MGARD(75cbf6cfa14f069b2d155b3267a59d3792506ff4)
+- ZFP(f40868a6a1c190c802e7d8b5987064f044bf7812)
 
-CPU Compressor: ZFP(1.0.0), SZ3(v3.1.7)
+CPU Compressor: 
+- ZFP(f40868a6a1c190c802e7d8b5987064f044bf7812) 
+- SZ3(c49fd17f2d908835c41000c1286c510046c0480e)
 
 Make sure you adjust configuration and data path first.
-
+For MGARD compressor, please configurate building script based on your micro arch(build_scripts/build_mgard_<micro_arch>_hopper.sh)
 To build and test the framework:
 
 ```
-# build
+# clone, build all base compressor and then build our multi-component compressor
 ./build_script.sh 8
 
 # test cpu compressors
