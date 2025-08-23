@@ -8,6 +8,8 @@ CPU Compressor:
 - ZFP(f40868a6a1c190c802e7d8b5987064f044bf7812) 
 - SZ3(c49fd17f2d908835c41000c1286c510046c0480e)
 
+For compiling safety, please use GCC 8.5 - 11.x.
+
 Make sure you adjust configuration and data path first.
 For MGARD compressor, please configurate building script based on your micro arch(build_scripts/build_mgard_<micro_arch>_hopper.sh)
 To build and test the framework:

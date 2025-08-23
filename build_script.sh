@@ -81,7 +81,6 @@ rm -rf ./build
 
 cmake -S . -B ./build \
         -DENABLE_CUDA=ON \
-        -DCMAKE_LINKER=$LD \
         -DCMAKE_BUILD_TYPE=Release
 
 cmake --build ./build -j$(nproc)
